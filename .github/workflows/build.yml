@@ -1,0 +1,67 @@
+name: Build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - Debug
+          #- Release
+    steps:
+      - name: Check out files
+        uses: actions/checkout@v3.5.2
+        with:
+          submodules: true
+          fetch-depth: 0
+          lfs: false
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v1.3.1
+
+      - name: Generate project files
+        run: tools/premake5 vs2022 --no-check
+
+      - name: Set up problem matching
+        uses: ammaraskar/msvc-problem-matcher@master
+
+      - name: Build ${{matrix.configuration}}
+        run: msbuild /m /v:minimal /p:Configuration=${{matrix.configuration}} /p:Platform=x64 build/shield-development.sln
+
+      - name: Upload ${{matrix.configuration}} DLL
+        if: matrix.configuration == 'Debug'
+        uses: actions/upload-artifact@v3.1.2
+        with:
+          name: ${{matrix.configuration}} DLL
+          path: |
+            build/bin/x64/${{matrix.configuration}}/d3d11.dll
+
+  create_release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download d3d11.dll
+        uses: actions/download-artifact@v3
+        with:
+          name: Debug DLL
+          path: artifacts
+
+      - name: Create a Release
+        uses: marvinpinto/action-automatic-releases@latest
+        with:
+          repo_token: ${{ secrets.TOKEN }}
+          automatic_release_tag: bo4-${{ github.run_number }}
+          title: Release bo4-${{ github.run_number }}
+          prerelease: false
+          files: |
+            artifacts/d3d11.dll
