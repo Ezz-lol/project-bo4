@@ -2,11 +2,11 @@
 #include "definitions/game.hpp"
 #include "loader/component_loader.hpp"
 
-#include <utils/hook.hpp>
-#include <utils/io.hpp>
-#include <utils/string.hpp>
-#include <utils/thread.hpp>
-#include <utils/compression.hpp>
+#include <utilities/hook.hpp>
+#include <utilities/io.hpp>
+#include <utilities/string.hpp>
+#include <utilities/thread.hpp>
+#include <utilities/compression.hpp>
 #include <exception/minidump.hpp>
 
 namespace blackbox
@@ -64,12 +64,12 @@ namespace blackbox
 
 		void display_error_dialog()
 		{
-			const std::string error_str = utils::string::va("Fatal error (0x%08X) at 0x%p (0x%p).\n"
+			const std::string error_str = utilities::string::va("Fatal error (0x%08X) at 0x%p (0x%p).\n"
 			                                                "A minidump has been written.\n",
 			                                                exception_data.code, exception_data.address,
 				                                            reverse_b(reinterpret_cast<uint64_t>(exception_data.address)));
 
-			utils::thread::suspend_other_threads();
+			utilities::thread::suspend_other_threads();
 			show_mouse_cursor();
 
 			MessageBoxA(nullptr, error_str.data(), "Project-BO4 ERROR", MB_ICONERROR);
@@ -98,7 +98,7 @@ namespace blackbox
 
 		size_t get_reset_state_stub()
 		{
-			static auto* stub = utils::hook::assemble([](utils::hook::assembler& a)
+			static auto* stub = utilities::hook::assemble([](utilities::hook::assembler& a)
 			{
 				a.sub(rsp, 0x10);
 				a.or_(rsp, 0x8);
@@ -153,19 +153,19 @@ namespace blackbox
 #undef EXCEPTION_CASE
 		}
 
-		std::string get_memory_registers(const LPEXCEPTION_POINTERS exceptioninfo)
+		std::string get_memory_registers(const LPEXCEPTION_POINTERS exception_info)
 		{
-			if (IsBadReadPtr(exceptioninfo, sizeof(EXCEPTION_POINTERS)))
+			if (IsBadReadPtr(exception_info, sizeof(EXCEPTION_POINTERS)))
 				return "";
 
-			const auto* ctx = exceptioninfo->ContextRecord;
+			const auto* ctx = exception_info->ContextRecord;
 
 			std::string registers_scroll{};
 			registers_scroll.append("registers:\r\n{\r\n");
 
 			const auto x64register = [&registers_scroll](const char* key, DWORD64 value)
 			{
-				registers_scroll.append(utils::string::va("\t%s = 0x%llX\r\n", key, value));
+				registers_scroll.append(utilities::string::va("\t%s = 0x%llX\r\n", key, value));
 			};
 
 			x64register("rax", ctx->Rax);
@@ -191,29 +191,36 @@ namespace blackbox
 			return registers_scroll;
 		}
 
-		std::string get_callstack_summary(int trace_max_depth = 18)
+		std::string get_callstack_summary(void* exception_addr, int trace_depth = 32)
 		{
 			std::string callstack_scroll("callstack:\r\n{\r\n");
-			void* stack[32]; if (trace_max_depth > 32) trace_max_depth = 32;
-			uint16_t count = RtlCaptureStackBackTrace(1, trace_max_depth, stack, NULL);
 
-			for (uint16_t i = 0; i < count; i++)
+			void* backtrace_stack[32]; int backtrace_stack_size = ARRAYSIZE(backtrace_stack);
+			if (trace_depth > backtrace_stack_size) trace_depth = backtrace_stack_size;
+
+			size_t count = RtlCaptureStackBackTrace(0, trace_depth, backtrace_stack, NULL);
+
+			auto itr = std::find(backtrace_stack, backtrace_stack + backtrace_stack_size, exception_addr);
+			auto exception_start_index = std::distance(backtrace_stack, itr);
+
+			for (size_t i = exception_start_index; i < count; i++)
 			{
-				const auto prnt = utils::nt::library::get_by_address(stack[i]);
-				size_t rva = reinterpret_cast<uint64_t>(stack[i]) - reinterpret_cast<uint64_t>(prnt.get_ptr());
+				const auto from = utilities::nt::library::get_by_address(backtrace_stack[i]);
+				size_t rva = reinterpret_cast<uint64_t>(backtrace_stack[i]) - reinterpret_cast<uint64_t>(from.get_ptr());
 
-				callstack_scroll.append(std::format("\t{}: {:012X}\r\n", prnt.get_name(), rva));
+				if (from.get_name() == "BlackOps4.exe"s) rva += 0x140000000;
+
+				callstack_scroll.append(std::format("\t{}: {:012X}\r\n", from.get_name(), rva));
 			}
-			callstack_scroll.append("}");
 
-			return callstack_scroll;
+			return callstack_scroll.append("}");
 		}
 
 		std::string generate_crash_info(const LPEXCEPTION_POINTERS exceptioninfo)
 		{
-			const auto main_module = utils::nt::library{};
 			const auto& build_info = game::version_string;
-			const auto thread_id = ::GetCurrentThreadId(); // TODO: Find Thread's Name
+			const auto main_module = utilities::nt::library{};
+			const auto rip_address = exceptioninfo->ExceptionRecord->ExceptionAddress;
 
 			std::string info{};
 			const auto line = [&info](const std::string& text)
@@ -224,22 +231,22 @@ namespace blackbox
 
 			line(build_info + " Crash Report\r\n");
 
-			line(utils::string::va("Exception Code: 0x%08X(%s)", exceptioninfo->ExceptionRecord->ExceptionCode, 
+			line(utilities::string::va("Exception Code: 0x%08X(%s)", exceptioninfo->ExceptionRecord->ExceptionCode, 
 				get_exception_string(exceptioninfo->ExceptionRecord->ExceptionCode)));
-			line(utils::string::va("Exception Addr: 0x%llX[%s]", exceptioninfo->ExceptionRecord->ExceptionAddress, 
-				utils::nt::library::get_by_address(exceptioninfo->ExceptionRecord->ExceptionAddress).get_name().c_str()));
-			line(utils::string::va("Main Module: %s[0x%llX]", main_module.get_name().c_str(), main_module.get_ptr()));
-			line(utils::string::va("Thread ID: %d(%s)", GetCurrentThreadId(), is_game_thread() ? "Main Thread" : "Auxiliary Threads"));
+			line(utilities::string::va("Exception Addr: 0x%llX[%s]", exceptioninfo->ExceptionRecord->ExceptionAddress, 
+				utilities::nt::library::get_by_address(exceptioninfo->ExceptionRecord->ExceptionAddress).get_name().c_str()));
+			line(utilities::string::va("Main Module: %s[0x%llX]", main_module.get_name().c_str(), main_module.get_ptr()));
+			line(utilities::string::va("Thread ID: %d(%s)", GetCurrentThreadId(), is_game_thread() ? "Main Thread" : "Auxiliary Threads"));
 
 			if (exceptioninfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
 			{
-				line(utils::string::va("\r\nExtended Info: Attempted to %s 0x%012X",
+				line(utilities::string::va("\r\nExtended Info: Attempted to %s 0x%012X",
 					exceptioninfo->ExceptionRecord->ExceptionInformation[0] == 1 ? "write to" : "read from",
 					exceptioninfo->ExceptionRecord->ExceptionInformation[1]));
 			}
 
 			line("\r\n");
-			line(get_callstack_summary(18));
+			line(get_callstack_summary(rip_address));
 			line(get_memory_registers(exceptioninfo));
 
 			line("\r\nTimestamp: "s + get_timestamp());
@@ -249,10 +256,10 @@ namespace blackbox
 
 		void write_minidump(const LPEXCEPTION_POINTERS exceptioninfo)
 		{
-			const std::string crash_name = utils::string::va("minidumps/shield-crash-%s.zip",
+			const std::string crash_name = utilities::string::va("minidumps/shield-crash-%s.zip",
 			                                                 get_timestamp().data());
 
-			utils::compression::zip::archive zip_file{};
+			utilities::compression::zip::archive zip_file{};
 			zip_file.add("crash.dmp", exception::create_minidump(exceptioninfo));
 			zip_file.add("info.txt", generate_crash_info(exceptioninfo));
 			zip_file.write(crash_name, "Project-bo4 Crash Dump");
@@ -297,11 +304,11 @@ namespace blackbox
 
 		void pre_start() override
 		{
-			const utils::nt::library ntdll("ntdll.dll");
+			const utilities::nt::library ntdll("ntdll.dll");
 			auto* set_filter = ntdll.get_proc<void(*)(LPTOP_LEVEL_EXCEPTION_FILTER)>("RtlSetUnhandledExceptionFilter");
 
 			set_filter(exception_filter);
-			utils::hook::jump(set_filter, set_unhandled_exception_filter_stub);
+			utilities::hook::jump(set_filter, set_unhandled_exception_filter_stub);
 		}
 	};
 }
