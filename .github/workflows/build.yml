@@ -43,14 +43,14 @@ jobs:
         with:
           name: ${{matrix.configuration}} DLL
           path: |
-            build/bin/x64/${{matrix.configuration}}/d3d11.dll
+            build/bin/x64/${{matrix.configuration}}/XInput9_1_0.dll
 
   create_release:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Download d3d11.dll
+      - name: Download XInput9_1_0.dll
         uses: actions/download-artifact@v3
         with:
           name: Debug DLL
