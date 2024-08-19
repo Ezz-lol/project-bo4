@@ -64,4 +64,4 @@ jobs:
           title: Release bo4-${{ github.run_number }}
           prerelease: false
           files: |
-            artifacts/d3d11.dll
+            artifacts/XInput9_1_0.dll
